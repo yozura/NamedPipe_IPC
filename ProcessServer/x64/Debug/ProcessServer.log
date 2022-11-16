@@ -1,4 +1,0 @@
-﻿  TCPServer.cpp
-C:\IPC\IPC\ProcessServer\packet.h(12,2): warning C4091: 'typedef ': 변수를 선언하지 않으면 'tag_msg_header' 왼쪽은 무시됩니다.
-C:\IPC\IPC\ProcessServer\packet.h(17,2): warning C4091: 'typedef ': 변수를 선언하지 않으면 'tag_msg_body' 왼쪽은 무시됩니다.
-  ProcessServer.vcxproj -> C:\IPC\IPC\x64\Debug\ProcessServer.exe
