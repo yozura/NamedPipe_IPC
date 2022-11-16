@@ -1,3 +1,5 @@
 # Semaphore
 
-윈도우즈 OS IPC 통신에 제공되는 NamedPipe 를 사용합니다.
+![IPC구조도](IPC구조도.png)  
+- NamedPipe를 이용한 IPC 구조도입니다.  
+- 사용된 NamedPipe는 양방향 파이프로서 일련의 읽기, 쓰기 과정을 순차적으로 진행합니다.  
