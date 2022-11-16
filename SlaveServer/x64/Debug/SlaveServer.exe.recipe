@@ -2,7 +2,7 @@
 <Project>
   <ProjectOutputs>
     <ProjectOutput>
-      <FullPath>D:\Semaphore\x64\Debug\MsgQ.exe</FullPath>
+      <FullPath>D:\Semaphore\x64\Debug\SlaveServer.exe</FullPath>
     </ProjectOutput>
   </ProjectOutputs>
   <ContentFiles />
