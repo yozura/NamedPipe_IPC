@@ -1,4 +1,4 @@
-# Semaphore
+# NamedPipe
 
 ![IPC구조도](IPC구조도.png)  
 - NamedPipe를 이용한 IPC 구조도입니다.  
