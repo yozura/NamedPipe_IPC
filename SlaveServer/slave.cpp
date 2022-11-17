@@ -1,15 +1,17 @@
-#include "common.h"
+#include "../com/psi.h"
 
 #define BUFSIZE 1024
 
 LPCTSTR CheckServerType(char* type);
 HANDLE TryToConnectPipe(LPCTSTR lpszPipeName, int timeout);
 BOOL ChangePipeMode(HANDLE hPipe, DWORD dwMode);
-BOOL WritePipeMessage(HANDLE hPipe, const void* buf, DWORD writeBytes, DWORD cbWritten);
+BOOL WritePipeMessage(HANDLE hPipe, void* buf, DWORD writeBytes, DWORD cbWritten);
 BOOL ReadPipeMessage(HANDLE hPipe, void* buf, DWORD readBytes, DWORD cbRead);
 
 int main(int argc, char* argv[])
 {
+    setlocale(LC_ALL, "korean");
+
     HANDLE hPipe;
     TCHAR buf[BUFSIZE];
     BOOL result = FALSE;
@@ -37,7 +39,7 @@ int main(int argc, char* argv[])
     if (FALSE == result) return -1;
 
     // 서버 초기 세팅 메시지를 읽는다.
-    readBytes = BUFSIZE * sizeof(TCHAR);
+    readBytes = BUFSIZE;
     result = ReadPipeMessage(hPipe, buf, readBytes, 0);
     if (FALSE == result) return -1;
 
@@ -47,6 +49,8 @@ int main(int argc, char* argv[])
         if (getc(stdin) == 'e') break;
     }
 
+    FlushFileBuffers(hPipe);
+    DisconnectNamedPipe(hPipe);
     CloseHandle(hPipe);
 
     return 0;
@@ -94,7 +98,7 @@ HANDLE TryToConnectPipe(LPCTSTR lpszPipeName, int timeout)
             exit(1);
         }
 
-        // 파이프를 연결하기 위해 지정한 시간 동안 대기하다가 연결되지 않을 시 종료
+        // 파이프를 연결하기 위해 지정한 시간 동안 대기하다가 연결되지 않을 시 강제 종료
         if (!WaitNamedPipe(lpszPipeName, timeout))
         {
             printf("Could not open pipe: 20 second wait timed out.");
@@ -123,18 +127,18 @@ BOOL ChangePipeMode(HANDLE hPipe, DWORD dwMode)
     return TRUE;
 }
 
-BOOL WritePipeMessage(HANDLE hPipe, const void* buf, DWORD writeBytes, DWORD cbWritten)
+BOOL WritePipeMessage(HANDLE hPipe, void* buf, DWORD writeBytes, DWORD cbWritten)
 {
     BOOL result;
 
     // 연결된 파이프 서버에 메시지를 전송
-    wprintf(TEXT("Sending %d byte message: \"%s\"\n"), writeBytes, (LPCTSTR)buf);
+    wprintf(TEXT("Sending %d byte message: \"%s\"\n"), writeBytes, (TCHAR*)buf);
     result = WriteFile(
-        hPipe,           // 파이프 핸들
-        buf,             // 메시지 버퍼
-        writeBytes,      // 메시지 길이
-        &cbWritten,      // 보내는데 성공했을 경우 바이트 수가 기록됨 
-        NULL);           // 중첩 I/O 전용
+            hPipe,           // 파이프 핸들
+            buf,             // 메시지 버퍼
+            writeBytes,      // 메시지 길이
+            &cbWritten,      // 보내는데 성공했을 경우 바이트 수가 기록됨 
+            NULL);           // 중첩 I/O 전용
     if (!result)
     {
         wprintf(TEXT("WriteFile to pipe failed. GLE=%d\n"), GetLastError());
