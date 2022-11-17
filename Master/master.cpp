@@ -1,4 +1,9 @@
+/* 포함 라이브러리 */
+#include <locale.h>
+
+/* 사용자 정의 라이브러리 */
 #include "../com/psi.h"
+#include "../com/packet.h"
 #include "pipefunc.h"
 
 #define BUFSIZE     1024
@@ -29,7 +34,7 @@ int main(int argc, char* argv[])
         psi.si.lpTitle = lpTitles[i];
 
         lstrcpy(psi.cmdLine, cmdLines[i]);
-        psi.lpszPipeName = lpszPipenames[i];
+        psi.lpszPipeName = lpszPipeNames[i];
 
         result = InitializeSlave(&psi, BUFSIZE);
         if (!result) return -1;

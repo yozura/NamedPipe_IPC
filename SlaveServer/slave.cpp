@@ -1,3 +1,9 @@
+/* 포함 라이브러리 */
+#include <locale.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/* 사용자 정의 라이브러리 */
 #include "../com/psi.h"
 
 #define BUFSIZE 1024
@@ -65,7 +71,7 @@ LPCTSTR CheckServerType(char* type)
     for (int i = 0; i < PIPE_SERVER_COUNT; ++i)
     {
         if (strcmp(type, types[i]) == 0)
-            return lpszPipenames[i];
+            return lpszPipeNames[i];
     }
 
     return NULL;
@@ -94,14 +100,14 @@ HANDLE TryToConnectPipe(LPCTSTR lpszPipeName, int timeout)
         // 에러 코드가 ERROR_PIPE_BUSY 일 경우 종료한다.
         if (GetLastError() != ERROR_PIPE_BUSY)
         {
-            _tprintf(TEXT("Could not open pipe. GLE=%d\n"), GetLastError());
+            wprintf(TEXT("파이프 열기 실패. (에러 코드 = %d)\n"), GetLastError());
             exit(1);
         }
 
         // 파이프를 연결하기 위해 지정한 시간 동안 대기하다가 연결되지 않을 시 강제 종료
         if (!WaitNamedPipe(lpszPipeName, timeout))
         {
-            printf("Could not open pipe: 20 second wait timed out.");
+            MessageBox(NULL, TEXT(""), TEXT(""), MB_ICONERROR);
             exit(1);
         }
     }
