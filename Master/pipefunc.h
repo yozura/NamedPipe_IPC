@@ -11,6 +11,36 @@
 ///     true일 경우 서버 프로세스 생성에 성공하여 파이프 서버 정보 구조체에 저장됩니다.
 ///     false일 경우 프로세스 생성에 실패했습니다.
 /// </returns>
+bool CreateSlaveProcess(PIPE_SERVER_INFO* psi);
+
+/// <summary>
+/// 하위 서버 파이프를 생성합니다.
+/// </summary>
+/// <param name="psi">파이프 서버 정보 구조체입니다.</param>
+/// <returns>
+///     true일 경우 서버 파이프 생성에 성공하여 파이프 서버 정보 구조체에 저장됩니다.
+///     false일 경우 파이프 생성에 에러가 발생했습니다.
+/// </returns>
+bool CreateSlavePipe(PIPE_SERVER_INFO* psi, DWORD bufSize);
+
+/// <summary>
+/// 하위 서버 프로세스를 실행하고 하위 서버와 연결할 파이프를 생성합니다.
+/// </summary>
+/// <param name="psi">파이프 서버 정보 구조체입니다.</param>
+/// <returns>
+///     true일 경우 하위 파이프 생성, 하위 서버 프로세스 생성에 성공하여 파이프 서버 정보 구조체에 저장됩니다.
+///     false일 경우 초기화에 실패한 사유를 메세지 박스로 출력합니다.
+/// </returns>
+bool InitializeSlave(PIPE_SERVER_INFO* psi, DWORD bufSize);
+
+/// <summary>
+/// 파이프에 작성된 메시지의 정보를 파악해 답변을 보냅니다.
+/// </summary>
+/// <param name="pchRequest"></param>
+/// <param name="pchReply"></param>
+/// <param name="pchBytes"></param>
+void GetAnswerToRequest(LPTSTR pchRequest, LPTSTR pchReply, LPDWORD pchBytes, LPCTSTR pszSrc, DWORD bufSize);
+
 bool CreateSlaveProcess(PIPE_SERVER_INFO* psi)
 {
     if (!psi) return false;
@@ -30,17 +60,11 @@ bool CreateSlaveProcess(PIPE_SERVER_INFO* psi)
         return false;
     }
 
+    CloseHandle(psi->pi.hProcess);
+    CloseHandle(psi->pi.hThread);
     return true;
 }
 
-/// <summary>
-/// 하위 서버 파이프를 생성합니다.
-/// </summary>
-/// <param name="psi">파이프 서버 정보 구조체입니다.</param>
-/// <returns>
-///     true일 경우 서버 파이프 생성에 성공하여 파이프 서버 정보 구조체에 저장됩니다.
-///     false일 경우 파이프 생성에 에러가 발생했습니다.
-/// </returns>
 bool CreateSlavePipe(PIPE_SERVER_INFO* psi, DWORD bufSize)
 {
     HANDLE hPipe = CreateNamedPipe(
@@ -63,14 +87,6 @@ bool CreateSlavePipe(PIPE_SERVER_INFO* psi, DWORD bufSize)
     return true;
 }
 
-/// <summary>
-/// 하위 서버 프로세스를 실행하고 하위 서버와 연결할 파이프를 생성합니다.
-/// </summary>
-/// <param name="psi">파이프 서버 정보 구조체입니다.</param>
-/// <returns>
-///     true일 경우 하위 파이프 생성, 하위 서버 프로세스 생성에 성공하여 파이프 서버 정보 구조체에 저장됩니다.
-///     false일 경우 초기화에 실패한 사유를 메세지 박스로 출력합니다.
-/// </returns>
 bool InitializeSlave(PIPE_SERVER_INFO* psi, DWORD bufSize)
 {
     bool result;
@@ -87,15 +103,15 @@ bool InitializeSlave(PIPE_SERVER_INFO* psi, DWORD bufSize)
     result = CreateSlaveProcess(psi);
     if (!result)
     {
-        MessageBox(NULL, TEXT("하위 서버 프로세스 생성 실패"), TEXT("CreateSalveProcess()"), MB_ICONERROR);        return false;
+        MessageBox(NULL, TEXT("하위 서버 프로세스 생성 실패"), TEXT("CreateSalveProcess()"), MB_ICONERROR);  
+        return false;
     }
 
     return true;
 }
 
-
 /// <summary>
-/// 
+/// 아직 작성하지 않음. 추후 수정
 /// </summary>
 /// <param name="hPipe"></param>
 /// <param name="buf"></param>
@@ -104,16 +120,15 @@ bool InitializeSlave(PIPE_SERVER_INFO* psi, DWORD bufSize)
 /// <returns></returns>
 bool WritePipeMessage(HANDLE hPipe, const void* buf, DWORD writeBytes, DWORD cbWritten);
 
-/// <summary>
-/// 파이프에 작성된 메시지의 정보를 파악해 답변을 보냅니다.
-/// </summary>
-/// <param name="pchRequest"></param>
-/// <param name="pchReply"></param>
-/// <param name="pchBytes"></param>
-void GetAnswerToRequest(LPTSTR pchRequest, LPTSTR pchReply, LPDWORD pchBytes, DWORD bufSize)
+void GetAnswerToRequest(LPTSTR pchRequest, LPTSTR pchReply, LPDWORD pchBytes, LPCTSTR pszSrc, DWORD bufSize)
 {
-    wprintf(TEXT("클라이언트가 보낸 메시지 : %s\n"), pchRequest);
-    if (FAILED(StringCchCopy(pchReply, bufSize, TEXT("파이프 연결 성공"))))
+    // 1. 받아온 메시지를 서버 로그에 출력한다
+    wprintf(TEXT("[MASTER SERVER] 받은 메시지 : %s\n"), pchRequest);
+
+    // 2. 메시지 패킷을 분석해 그에 맞는 답을 하위 서버에 에코한다.
+    // TODO
+
+    if (FAILED(StringCchCopy(pchReply, bufSize, pszSrc)))
     {
         *pchBytes = 0;
         pchReply[0] = 0;

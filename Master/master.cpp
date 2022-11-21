@@ -64,12 +64,6 @@ int main(int argc, char* argv[])
     WaitForSingleObject(g_Servers[(int)PIPE_SERVER::ASGARD].hPipe, INFINITE);
     WaitForSingleObject(g_Servers[(int)PIPE_SERVER::MIDGARD].hPipe, INFINITE);
 
-    for (int i = 0; i < PIPE_SERVER_COUNT; ++i)
-    {
-        CloseHandle(g_Servers[i].pi.hProcess);
-        CloseHandle(g_Servers[i].pi.hThread);
-    }
-
     printf("마스터 서버 종료\n");
     return 0;
 }
@@ -130,7 +124,7 @@ DWORD WINAPI PipeInstanceThread(LPVOID arg)
         }
 
         // 2. 메시지 처리
-        GetAnswerToRequest(pchRequest, pchReply, &cbReplyBytes, BUFSIZE);
+        GetAnswerToRequest(pchRequest, pchReply, &cbReplyBytes, TEXT("Test"), BUFSIZE);
 
         // 3. 메시지 작성
         result = WriteFile(
@@ -159,4 +153,3 @@ DWORD WINAPI PipeInstanceThread(LPVOID arg)
     printf("쓰레드 종료\n");
     return 0;
 }
-

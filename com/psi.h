@@ -13,9 +13,16 @@
 #define PIPE_MIDGARD TEXT("\\\\.\\pipe\\midgard")
 
 /* 파이프 서버 접근 인덱스 */
-enum PIPE_SERVER
+enum class PIPE_SERVER
 {
 	ASGARD = 0,
+	MIDGARD,
+};
+
+/* 파이프 서버별 포트 번호 */
+enum class PIPE_SERVER_PORT
+{
+	ASGARD = 9010,
 	MIDGARD,
 };
 
@@ -42,7 +49,6 @@ static LPCTSTR lpszPipeNames[] = {
 	이 구조체를 이용해 파이프 서버를 관리할 수 있습니다.
 	
 */
-
 typedef struct tag_pipe_server_info
 {
 	STARTUPINFO				si;				// 프로세스 생성시 필요

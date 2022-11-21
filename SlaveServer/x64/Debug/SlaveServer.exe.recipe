@@ -2,7 +2,7 @@
 <Project>
   <ProjectOutputs>
     <ProjectOutput>
-      <FullPath>D:\Programming\NamedPipe_IPC\x64\Debug\SlaveServer.exe</FullPath>
+      <FullPath>D:\NamedPipe_IPC\x64\Debug\SlaveServer.exe</FullPath>
     </ProjectOutput>
   </ProjectOutputs>
   <ContentFiles />
