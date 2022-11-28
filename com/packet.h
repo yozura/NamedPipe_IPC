@@ -24,8 +24,8 @@
 typedef struct tag_msg_header
 {
 	int type;
-	int length;
-	char name[9];
+	int length;	
+	char userName[9];
 	char path[128];
 	char dummy[HEADSIZE - (NAMESIZE + PATHSIZE + 2) - (2 * sizeof(int))];
 } MSG_HEADER;

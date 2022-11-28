@@ -124,7 +124,9 @@ DWORD WINAPI PipeInstanceThread(LPVOID arg)
         }
 
         // 2. 메시지 처리
-        GetAnswerToRequest(pchRequest, pchReply, &cbReplyBytes, TEXT("Test"), BUFSIZE);
+        TCHAR buf[BUFSIZE];
+        wsprintf(buf, pchRequest);
+        GetAnswerToRequest(pchRequest, pchReply, &cbReplyBytes, buf, BUFSIZE);
 
         // 3. 메시지 작성
         result = WriteFile(

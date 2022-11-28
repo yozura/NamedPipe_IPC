@@ -14,8 +14,10 @@
 
 #define SERVERSTORAGE "E:\\Mark12\\testArchive\\sock\\"
 #define BUFSIZE     2048
+#define MAX_SOCKET  32
 
-typedef struct tag_server_info {
+typedef struct tag_server_info 
+{
     HANDLE      hPipe;
     LPCTSTR     pipeName;
     TCHAR       serverName[64];
@@ -23,7 +25,19 @@ typedef struct tag_server_info {
     int         index;
 } SERVER_INFO;
 
-//LPCTSTR CheckServerType(char* type);
+typedef struct tag_socket_info
+{
+    SOCKET              sock;
+    struct sockaddr_in  addr;
+    int                 addrlen;
+    TCHAR               serverName[64];
+} SOCKET_INFO;
+
+SOCKET_INFO* g_SocketInfoArray[MAX_SOCKET];
+int si_cursor;
+
+bool AddSocketInfo(SOCKET sock, struct sockaddr_in& addr, int addrlen);
+bool RemoveSocketInfo(TCHAR* name);
 SERVER_INFO* CheckServerType(char* type);
 HANDLE TryToConnectPipe(LPCTSTR lpszPipeName, int timeout);
 BOOL ChangePipeMode(HANDLE hPipe, DWORD dwMode);
@@ -36,8 +50,9 @@ void err_quit(const char* title);
 
 int main(int argc, char* argv[])
 {
-    setlocale(LC_ALL, "korean");
+    setlocale(LC_ALL, "");
 
+    si_cursor = 0;
     HANDLE hPipe;
     SERVER_INFO* serverInfo = NULL;
     TCHAR buf[BUFSIZE];
@@ -51,27 +66,27 @@ int main(int argc, char* argv[])
 
     // 어떤 서버를 담당하는지 체크하는 부분
     serverInfo = CheckServerType(argv[1]);
-    if (NULL == serverInfo) return -1;
+    if (NULL == serverInfo) err_quit("CheckServerType()");
 
     // 파이프 연결 시도
     hPipe = TryToConnectPipe(serverInfo->pipeName, timeout);
-    if (NULL == hPipe) return -1;
+    if (NULL == hPipe) err_quit("TryToConnectPipe()");
 
     // 파이프 연결에 성공했으므로 메시지 읽기 모드로 전환
     result = ChangePipeMode(hPipe, (PIPE_READMODE_MESSAGE));
-    if (FALSE == result) return -1;
+    if (FALSE == result) err_quit("ChangePipeMode()");
     
     // 서버 초기 세팅 메시지를 작성한다.
     lstrcpy(buf, serverInfo->pipeName);
     lstrcat(buf, TEXT(" 활성화 성공"));
     writeBytes = (lstrlen(buf) + 1) * sizeof(TCHAR);
     result = WritePipeMessage(hPipe, buf, writeBytes, 0);
-    if (FALSE == result) return -1;
+    if (FALSE == result) err_quit("WritePipeMessage()");
 
     // 서버 초기 세팅 메시지를 읽는다.
     readBytes = BUFSIZE;
     result = ReadPipeMessage(hPipe, buf, readBytes, 0);
-    if (FALSE == result) return -1;
+    if (FALSE == result) err_quit("ReadPipeMessage");
 
     // ---------------------------------
     /* 서버-클라이언트 루틴 시작 */
@@ -82,7 +97,7 @@ int main(int argc, char* argv[])
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) err_quit("WSAStartup()");
 
     SOCKET listen_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (listen_sock == INVALID_SOCKET) err_display("listener socket()");
+    if (listen_sock == INVALID_SOCKET) err_quit("listener socket()");
 
     int retval;
     struct sockaddr_in serveraddr;
@@ -91,16 +106,16 @@ int main(int argc, char* argv[])
     serveraddr.sin_addr.s_addr = INADDR_ANY;
 
     retval = bind(listen_sock, (struct sockaddr*)&serveraddr, sizeof(serveraddr));
-    if (retval == SOCKET_ERROR) err_display("bind()");
+    if (retval == SOCKET_ERROR) err_quit("bind()");
 
     retval = listen(listen_sock, SOMAXCONN);
-    if (retval == SOCKET_ERROR) err_display("listen()");
+    if (retval == SOCKET_ERROR) err_quit("listen()");
 
     struct sockaddr_in clientaddr;
     HANDLE hThread;
     SOCKET client_sock;
     int addrlen;
-
+    
     /* 서버 작업 쓰레드 처리 */
     while (true)
     {
@@ -112,9 +127,18 @@ int main(int argc, char* argv[])
             break;
         }
 
+        if (si_cursor >= MAX_SOCKET)
+        {
+            printf("클라이언트 최대 접속 수용 한계를 초과했습니다.\n");
+            continue;
+        }
+
         char addr[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &clientaddr.sin_addr, addr, sizeof(addr));
-        printf("클라이언트 연결 성공! [%s:%d]\n", addr, ntohs(clientaddr.sin_port));
+        printf("[SLAVE SERVER] 클라이언트 접속 [%s:%d]\n", addr, ntohs(clientaddr.sin_port));
+
+        if (!AddSocketInfo(client_sock, clientaddr, sizeof(clientaddr)))
+            closesocket(client_sock);
 
         hThread = CreateThread(NULL, 0, SlaveMain, (LPVOID)client_sock, 0, NULL);
         if (NULL == hThread)
@@ -134,6 +158,52 @@ int main(int argc, char* argv[])
     closesocket(listen_sock);
     WSACleanup();
     return 0;
+}
+
+bool AddSocketInfo(SOCKET sock, struct sockaddr_in& addr, int addrlen)
+{
+    if (si_cursor >= MAX_SOCKET)
+    {
+        printf("[오류] 소켓 정보가 가득 차 추가할 수 없습니다.");
+        return false;
+    }
+
+    SOCKET_INFO* ptr = new SOCKET_INFO;
+    if (NULL == ptr)
+    {
+        printf("[오류] 메모리가 부족합니다.");
+        return false;
+    }
+
+    ptr->sock = sock;
+    ptr->addr = addr;
+    ptr->addrlen = addrlen;
+    g_SocketInfoArray[si_cursor++] = ptr;
+    return true;
+}
+
+bool RemoveSocketInfo(TCHAR* name)
+{
+    for (int i = 0; i < si_cursor; ++i)
+    {
+        if (lstrcmp(g_SocketInfoArray[i]->serverName, name) == 0)
+        {
+            char addr[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &g_SocketInfoArray[i]->addr, addr, sizeof(addr));
+            printf("[SLAVE SERVER] 클라이언트 종료 [%s:%d]\n", addr, ntohs(g_SocketInfoArray[i]->addr.sin_port));
+
+            closesocket(g_SocketInfoArray[i]->sock);
+            delete g_SocketInfoArray[i];
+
+            if (i != (si_cursor - 1))
+                g_SocketInfoArray[i] = g_SocketInfoArray[si_cursor - 1];
+
+            --si_cursor;
+            return true;
+        }
+    }
+
+    return false;
 }
 
 SERVER_INFO* CheckServerType(char* type)
@@ -279,7 +349,7 @@ DWORD SlaveMain(LPVOID arg)
         MSG_HEADER* received = (MSG_HEADER*)hbuf;
         printf("type = %d\nlength = %d\npath = %s\n", received->type, received->length, received->path);
 
-        char* bbuf = (char*)calloc(received->length + 1, sizeof(char));
+        TCHAR* bbuf = (TCHAR*)calloc(received->length + 1, sizeof(TCHAR));
         if (NULL == bbuf)
         {
             err_display("Failed allocat body buffer\n");
@@ -296,13 +366,35 @@ DWORD SlaveMain(LPVOID arg)
         {
         case TYPE_CHAT:
         {
-            retval = recv(sock, bbuf, received->length, 0);
+            retval = recv(sock, (char*)bbuf, received->length * 2, 0);
             if (retval == SOCKET_ERROR) err_quit("body recv()");
 
-            int len = (int)strlen(bbuf);
+            int len = (int)lstrlen(bbuf);
             bbuf[len] = '\0';
-            printf("%d바이트를 받았습니다.\n", retval);
-            printf("[클라이언트] %s\n", bbuf);
+            printf("[SLAVE SERVER] %d바이트를 받았습니다.\n", retval);
+            printf("[SLAVE SERVER] [%s:%d] %ls\n", addr, ntohs(clientaddr.sin_port), bbuf);
+
+            /* 모든 클라에 에코잉 */
+            for (int i = 0; i < si_cursor; ++i)
+            {
+                SOCKET_INFO* ptr = g_SocketInfoArray[i];
+                retval = send(ptr->sock, (char*)hbuf, sizeof(MSG_HEADER), 0);
+                if (SOCKET_ERROR == retval)
+                {
+                    printf("[SLAVE SERVER] 채팅 메시지 헤더 전송에 실패했습니다.\n");
+                    if (!RemoveSocketInfo(ptr->serverName)) err_display("send() header");
+                    break;
+                }
+
+                retval = send(ptr->sock, (char*)bbuf, len, 0);
+                if (SOCKET_ERROR == retval)
+                {
+                    printf("[SLAVE SERVER] 채팅 메시지 전송에 실패했습니다.\n");
+                    if (!RemoveSocketInfo(ptr->serverName)) err_display("send() body");
+                    break;
+                }
+            }
+
         }
             break;
         case TYPE_TXT:
@@ -362,13 +454,21 @@ DWORD SlaveMain(LPVOID arg)
         }
             break;
         }
-
-        free(bbuf);
-        free(hbuf);
-        break;
+        
+        if (bbuf)
+        {
+            free(bbuf);
+            bbuf = 0;
+        }
+        
+        if (hbuf)
+        {
+            free(hbuf);
+            hbuf = 0;
+        }
     }
 
-    printf("클라이언트 종료! [%s:%d]\n", addr, ntohs(clientaddr.sin_port));
+    printf("[SLAVE SERVER]클라이언트 종료! [%s:%d]\n", addr, ntohs(clientaddr.sin_port));
 
     return 0;
 }
