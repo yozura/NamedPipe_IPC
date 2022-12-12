@@ -21,7 +21,7 @@ bool CreateMasterPipe(LPCTSTR pipeName, DWORD bufSize, HANDLE* hPipe)
         return false;
     }
 
-    hPipe = &tempPipe;
+    *hPipe = tempPipe;
     return true;
 }
 
@@ -125,11 +125,21 @@ bool InitializeSlave(PIPE_SERVER_INFO* psi, DWORD bufSize)
 }
 
 /// <summary>
-/// 아직 작성하지 않음. 추후 수정
+/// 특정 파이프 메시지를 작성.
 /// </summary>
-/// <param name="hPipe"></param>
-/// <param name="buf"></param>
-/// <param name="writeBytes"></param>
-/// <param name="cbWritten"></param>
+/// <param name="hPipe">파이프 핸들</param>
+/// <param name="buf">버퍼</param>
+/// <param name="writeBytes">작성할 데이터 크기</param>
+/// <param name="cbWritten">작성한 데이터 크기</param>
 /// <returns></returns>
-bool WritePipeMessage(HANDLE hPipe, const void* buf, DWORD writeBytes, DWORD cbWritten);
+BOOL WritePipeMessage(HANDLE hPipe, LPVOID buf, DWORD writeBytes, DWORD cbWritten);
+
+/// <summary>
+/// 특정 파이프 메시지를 읽음.
+/// </summary>
+/// <param name="hPipe">파이프 핸들</param>
+/// <param name="buf">버퍼</param>
+/// <param name="readBytes">읽을 데이터 크기</param>
+/// <param name="cbRead">읽은 데이터 크기</param>
+/// <returns>실패/성공 여부 반환</returns>
+BOOL ReadPipeMessage(HANDLE hPipe, LPVOID buf, DWORD readBytes, DWORD cbRead);

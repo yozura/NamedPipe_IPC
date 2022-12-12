@@ -15,10 +15,10 @@
 /// <param name="arg">생성된(초기화된) 파이프를 전달해야합니다.</param>
 DWORD WINAPI PipeInstanceThread(LPVOID arg);
 DWORD WINAPI MasterPipeThread(LPVOID arg);
-BOOL WritePipeMessage(HANDLE hPipe, void* buf, DWORD writeBytes, DWORD cbWritten);
 
 /* 전역 변수 */
-HANDLE g_MasterPipe;
+HANDLE g_hMasterPipe = NULL;
+BOOL g_Flag = FALSE;
 PIPE_SERVER_INFO g_Servers[PIPE_SERVER_COUNT]; 
 
 int main(int argc, char* argv[])
@@ -28,17 +28,13 @@ int main(int argc, char* argv[])
     bool result;
     HANDLE hThread;
 
-    CreateMasterPipe(PIPE_MASTER, BUFSIZE, &g_MasterPipe);
-    if (!ConnectNamedPipe(g_MasterPipe, NULL))
+    if (!CreateMasterPipe(PIPE_MASTER, BUFSIZE, &g_hMasterPipe))
     {
-        if (GetLastError() == ERROR_PIPE_CONNECTED)
-        {
-            MessageBox(NULL, TEXT("마스터 파이프 연결 실패"), TEXT("ConnectNamedPipe()"), MB_ICONERROR);
-            return -1;
-        }
+        MessageBox(NULL, TEXT("마스터 파이프 생성 실패"), TEXT("CreateMasterPipe()"), MB_ICONERROR);
+        return -1;
     }
 
-    hThread = CreateThread(NULL, 0, MasterPipeThread, 0, 0, NULL);
+    hThread = CreateThread(NULL, 0, MasterPipeThread, (LPVOID)g_hMasterPipe, 0, NULL);
     if (NULL == hThread)
     {
         wprintf(TEXT("쓰레드 생성 실패 (에러 코드 = %d)\n"), GetLastError());
@@ -87,6 +83,8 @@ int main(int argc, char* argv[])
     WaitForSingleObject(g_Servers[(int)PIPE_SERVER::ASGARD].hPipe, INFINITE);
     WaitForSingleObject(g_Servers[(int)PIPE_SERVER::MIDGARD].hPipe, INFINITE);
 
+    while (g_Flag == FALSE);
+
     printf("마스터 서버 종료\n");
     return 0;
 }
@@ -128,66 +126,124 @@ DWORD WINAPI PipeInstanceThread(LPVOID arg)
     }
 
     hPipe = (HANDLE)arg;
-    while (flag == FALSE)
-    {
-        // 1 ~ 2 ~ 3 반복, 마스터 서버에 메시지가 들어오는 경우는
-        // 초기 서버 세팅과 이후 확성기 모드 이외엔 없다.
+	result = ReadFile(
+		hPipe,                      // 파이프 핸들
+		pchRequest,                 // 수신 데이터 버퍼
+		PIPE_MSG_SIZE,              // 버퍼 사이즈
+		&cbBytesRead,               // 바이트 수신량
+		NULL);                      // 중첩 I/O 전용 파라미터
+	if (!result || 0 == cbBytesRead)
+	{
+		if (GetLastError() == ERROR_BROKEN_PIPE) printf("클라이언트 연결 종료\n");
+		else wprintf(TEXT("ReadFile() (에러 코드 = %d)\n"), GetLastError());
+        exit(1);
+	}
 
-        // 1. 메시지 읽기
-        result = ReadFile(
-            hPipe,                      // 파이프 핸들
-            pchRequest,                 // 수신 데이터 버퍼
-            PIPE_MSG_SIZE,              // 버퍼 사이즈
-            &cbBytesRead,               // 바이트 수신량
-            NULL);                      // 중첩 I/O 전용 파라미터
-        if (!result || 0 == cbBytesRead)
-        {
-            if (GetLastError() == ERROR_BROKEN_PIPE) printf("클라이언트 연결 종료\n");
-            else wprintf(TEXT("ReadFile() (에러 코드 = %d)\n"), GetLastError());
-            break;
-        }
-
-        // 2. 메시지 처리
-        PIPE_MSG* pm = (PIPE_MSG*)pchRequest;
-        printf("[MASTER SERVER] %s : %s\n", pm->userName, pm->msg);
-        switch (pm->type)
-        {
-        case PIPE_TYPE_INIT:
-            // 초기 메시지 세팅
-            if (!WritePipeMessage(hPipe, (LPVOID)pm, PIPE_MSG_SIZE, cbWritten))
-                flag = TRUE;
-            break;
-        case PIPE_TYPE_MP:
-        {
-            for (int i = 0; i < PIPE_SERVER_COUNT; ++i)
-            {
-                if (!WritePipeMessage(g_Servers[i].hPipe, (LPVOID)pm, PIPE_MSG_SIZE, cbWritten))
-                    flag = TRUE;
-            }
-            break;
-        }
-        }
-    }
-
+	// 2. 메시지 처리
+	PIPE_MSG* pm = (PIPE_MSG*)pchRequest;
+	printf("[MASTER SERVER] %s : %s\n", pm->userName, pm->msg);
+	switch (pm->type)
+	{
+	case PIPE_TYPE_INIT:
+		// 초기 메시지 세팅
+		if (!WritePipeMessage(hPipe, &pm, PIPE_MSG_SIZE, cbWritten))
+			flag = TRUE;
+		break;
+	case PIPE_TYPE_MP:
+	{
+		for (int i = 0; i < PIPE_SERVER_COUNT; ++i)
+		{
+			if (!WritePipeMessage(g_Servers[i].hPipe, &pm, PIPE_MSG_SIZE, cbWritten))
+				flag = TRUE;
+		}
+		break;
+	}
+	}
+    
     // 힙 할당 해제
     HeapFree(hHeap, 0, pchRequest);
     HeapFree(hHeap, 0, pchReply);
-
-    // 파이프 닫기
-    FlushFileBuffers(hPipe);
-    DisconnectNamedPipe(hPipe);
-    CloseHandle(hPipe);
-
-    printf("쓰레드 종료\n");
     return 0;
 }
 
 DWORD WINAPI MasterPipeThread(LPVOID arg)
 {
+    BOOL result;
+    PIPE_MSG pm;
+    HANDLE hPipe = (HANDLE)arg;
+
+    while (true)
+    {
+        printf("[MASTER SERVER:PIPE] 파이프 연결 대기중...\n");
+
+        // 연결
+        result = ConnectNamedPipe(hPipe, NULL) ? true : (GetLastError() == ERROR_PIPE_CONNECTED);
+        if (!result)
+        {
+            MessageBox(NULL, TEXT("마스터 파이프 연결 실패"), TEXT("ConnectNamedPipe()"), MB_ICONERROR);
+            return -1;
+        }
+
+        // 읽기
+        result = ReadPipeMessage(hPipe, &pm, PIPE_MSG_SIZE, 0);
+        if (!result)
+        {
+            MessageBox(NULL, TEXT("마스터 파이프 읽기 실패"), TEXT("ReadPipeMessage()"), MB_ICONERROR);
+            break;
+        }
+
+        printf("[MASTER SERVER:PIPE] %s : %s\n", pm.userName, pm.msg);
+
+        // 쓰기
+        for (int i = 0; i < PIPE_SERVER_COUNT; ++i)
+        {
+            result = WritePipeMessage(g_Servers[i].hPipe, &pm, PIPE_MSG_SIZE, 0);
+            if (!result)
+            {
+                MessageBox(NULL, TEXT("파이프 쓰기 실패"), TEXT("ReadPipeMessage()"), MB_ICONERROR);
+                break;
+            }
+        }
+
+        DisconnectNamedPipe(hPipe);
+    }
+
+    // 해제
+    FlushFileBuffers(hPipe);
+    DisconnectNamedPipe(hPipe);
+    CloseHandle(hPipe);
+
+    for (int i = 0; i < PIPE_SERVER_COUNT; ++i)
+    {
+        FlushFileBuffers(g_Servers[i].hPipe);
+        DisconnectNamedPipe(g_Servers[i].hPipe);
+        CloseHandle(g_Servers[i].hPipe);
+    }
+
+    g_Flag = true;
     return 0;
 }
 
-BOOL WritePipeMessage(HANDLE hPipe, void* buf, DWORD writeBytes, DWORD cbWritten)
+BOOL ReadPipeMessage(HANDLE hPipe, LPVOID buf, DWORD readBytes, DWORD cbRead)
+{
+    BOOL result;
+    result = ReadFile(
+        hPipe,
+        buf,
+        readBytes,
+        &cbRead,
+        NULL);
+    if (!result || 0 == cbRead)
+    {
+        if (GetLastError() == ERROR_BROKEN_PIPE) printf("클라이언트 연결 종료\n");
+        else wprintf(TEXT("ReadFile() (에러 코드 = %d)\n"), GetLastError());
+        return false;
+    }
+
+    return true;
+}
+
+BOOL WritePipeMessage(HANDLE hPipe, LPVOID buf, DWORD writeBytes, DWORD cbWritten)
 {
     BOOL result;
     result = WriteFile(

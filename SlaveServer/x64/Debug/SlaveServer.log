@@ -1,6 +1,8 @@
 ﻿  slave.cpp
-D:\NamedPipe_IPC\SlaveServer\slave.cpp(411,56): warning C4267: '초기화 중': 'size_t'에서 'int'(으)로 변환하면서 데이터가 손실될 수 있습니다.
-D:\NamedPipe_IPC\SlaveServer\slave.cpp(452,56): warning C4267: '초기화 중': 'size_t'에서 'int'(으)로 변환하면서 데이터가 손실될 수 있습니다.
+D:\Programming\NamedPipe_IPC\SlaveServer\slave.cpp(418,56): warning C4267: '초기화 중': 'size_t'에서 'int'(으)로 변환하면서 데이터가 손실될 수 있습니다.
+D:\Programming\NamedPipe_IPC\SlaveServer\slave.cpp(459,56): warning C4267: '초기화 중': 'size_t'에서 'int'(으)로 변환하면서 데이터가 손실될 수 있습니다.
+D:\Programming\NamedPipe_IPC\SlaveServer\slave.cpp(492,9): warning C4101: 'test' :참조되지 않은 지역 변수입니다.
+D:\Programming\NamedPipe_IPC\SlaveServer\slave.cpp(654,18): warning C4101: 'result' :참조되지 않은 지역 변수입니다.
   strobj.cpp
   코드를 생성하고 있습니다...
-  SlaveServer.vcxproj -> D:\NamedPipe_IPC\x64\Debug\SlaveServer.exe
+  SlaveServer.vcxproj -> D:\Programming\NamedPipe_IPC\x64\Debug\SlaveServer.exe

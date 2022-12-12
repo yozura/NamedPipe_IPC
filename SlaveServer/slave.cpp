@@ -14,7 +14,7 @@
 /* 라이브러리 링크 */
 #pragma comment(lib, "ws2_32")
 
-#define SERVERSTORAGE "E:\\Mark12\\testArchive\\sock\\"
+#define SERVERSTORAGE "D:\\IPCTEST\\server\\"
 #define BUFSIZE     2048
 #define MAX_SOCKET  32
 
@@ -35,8 +35,9 @@ typedef struct tag_socket_info
     TCHAR               serverName[64];
 } SOCKET_INFO;
 
-SERVER_INFO* serverInfo = NULL;
+SERVER_INFO* g_ServerInfo = NULL;
 SOCKET_INFO* g_SocketInfoArray[MAX_SOCKET];
+HANDLE g_hMasterPipe = NULL;
 int si_cursor;
 
 bool AddSocketInfo(SOCKET sock, struct sockaddr_in& addr, int addrlen);
@@ -50,6 +51,7 @@ BOOL ChangePipeMode(HANDLE hPipe, DWORD dwMode);
 BOOL WritePipeMessage(HANDLE hPipe, void* buf, DWORD writeBytes, DWORD cbWritten);
 BOOL ReadPipeMessage(HANDLE hPipe, void* buf, DWORD readBytes, DWORD cbRead);
 DWORD SlaveMain(LPVOID arg);
+DWORD SlavePipeThread(LPVOID arg);
 void err_display(const char* title);
 void err_quit(const char* title);
 
@@ -68,22 +70,22 @@ int main(int argc, char* argv[])
     // ---------------------------------
 
     // 어떤 서버를 담당하는지 체크하는 부분
-    serverInfo = CheckServerType(argv[1]);
-    if (NULL == serverInfo) err_quit("CheckServerType()");
+    g_ServerInfo = CheckServerType(argv[1]);
+    if (NULL == g_ServerInfo) err_quit("CheckServerType()");
 
-    // 파이프 연결 시도
-    hPipe = TryToConnectPipe(serverInfo->pipeName, timeout);
+    // 서버 파이프 연결 시도
+    hPipe = TryToConnectPipe(g_ServerInfo->pipeName, timeout);
     if (NULL == hPipe) err_quit("TryToConnectPipe()");
-    serverInfo->hPipe = hPipe;
+    g_ServerInfo->hPipe = hPipe;
 
-    // 파이프 연결에 성공했으므로 메시지 읽기 모드로 전환
+    // 서버 파이프 연결에 성공했으므로 메시지 읽기 모드로 전환
     result = ChangePipeMode(hPipe, (PIPE_READMODE_MESSAGE));
     if (FALSE == result) err_quit("ChangePipeMode()");
     
     // 서버 초기 세팅 메시지를 작성한다.
     PIPE_MSG pm;
     pm.type = PIPE_TYPE_INIT;
-    sprintf(pm.userName, "%d", serverInfo->port);
+    sprintf(pm.userName, "%d", g_ServerInfo->port);
     strcpy(pm.msg, "활성화 성공");
     
     writeBytes = PIPE_MSG_SIZE;
@@ -93,13 +95,13 @@ int main(int argc, char* argv[])
     // 서버 초기 세팅 메시지를 읽는다.
     readBytes = (int)strlen(pm.msg);
     result = ReadPipeMessage(hPipe, &pm, readBytes, 0);
-    if (FALSE == result) err_quit("ReadPipeMessage");
+    if (FALSE == result) err_quit("ReadPipeMessage()");
 
     // ---------------------------------
     /* 서버-클라이언트 루틴 시작 */
     // ---------------------------------
 
-    wprintf(TEXT("%s 서버 시작!\n"), serverInfo->serverName);
+    wprintf(TEXT("%s 서버 시작!\n"), g_ServerInfo->serverName);
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) err_quit("WSAStartup()");
 
@@ -109,7 +111,7 @@ int main(int argc, char* argv[])
     int retval;
     struct sockaddr_in serveraddr;
     serveraddr.sin_family = AF_INET;
-    serveraddr.sin_port = htons(serverInfo->port);
+    serveraddr.sin_port = htons(g_ServerInfo->port);
     serveraddr.sin_addr.s_addr = INADDR_ANY;
 
     retval = bind(listen_sock, (struct sockaddr*)&serveraddr, sizeof(serveraddr));
@@ -122,6 +124,14 @@ int main(int argc, char* argv[])
     HANDLE hThread;
     SOCKET client_sock;
     int addrlen;
+
+    hThread = CreateThread(NULL, 0, SlavePipeThread, (LPVOID)hPipe, 0, 0);
+    if (NULL == hThread)
+    {
+        printf("파이프 쓰레드 생성 실패! 접속 강제 종료!\n");
+        return -1;
+    }
+    else CloseHandle(hThread);
     
     /* 서버 작업 쓰레드 처리 */
     while (true)
@@ -291,7 +301,6 @@ BOOL ChangePipeMode(HANDLE hPipe, DWORD dwMode)
 BOOL WritePipeMessage(HANDLE hPipe, void* buf, DWORD writeBytes, DWORD cbWritten)
 {
     BOOL result;
-
     result = WriteFile(
             hPipe,           // 파이프 핸들
             buf,             // 메시지 버퍼
@@ -312,8 +321,6 @@ BOOL WritePipeMessage(HANDLE hPipe, void* buf, DWORD writeBytes, DWORD cbWritten
 BOOL ReadPipeMessage(HANDLE hPipe, void* buf, DWORD readBytes, DWORD cbRead)
 {
     BOOL result;
-
-    // 파이프 읽기
     result = ReadFile(
             hPipe,      // 파이프 핸들
             buf,        // 답장을 받을 버퍼
@@ -508,7 +515,7 @@ DWORD SlaveMain(LPVOID arg)
         if (received->type == -1) break;
 
         printf("type = %d\nlength = %d\npath = %s\n", received->type, received->length, received->path);
-        if (!((received->type == TYPE_CHAT) || (received->type == TYPE_TXT) || (received->type == TYPE_IMG) || (received->type == TYPE_TXT_REQ) || (received->type == TYPE_IMG_REQ))) continue;   ////////// 수정!
+        if (!((received->type == TYPE_CHAT) || (received->type == TYPE_TXT) || (received->type == TYPE_MP) || (received->type == TYPE_IMG) || (received->type == TYPE_TXT_REQ) || (received->type == TYPE_IMG_REQ))) continue;   ////////// 수정!
 
         char* bbuf = (char*)calloc(received->length + 1, sizeof(char));
         if (NULL == bbuf)
@@ -642,16 +649,21 @@ DWORD SlaveMain(LPVOID arg)
             printf("[SLAVE SERVER] %d바이트를 받았습니다.\n", retval);
             printf("[SLAVE SERVER] [%s:%d] %s\n", addr, ntohs(clientaddr.sin_port), bbuf);
 
-            std::cin >> test;
-
-            // 1. 파이프 통신
+            // 파이프 연결
+            HANDLE hMasterPipe;
+            BOOL result;
+            hMasterPipe = TryToConnectPipe(PIPE_MASTER, 5000);
+            if (NULL == hMasterPipe) err_display("Connect Master Pipe");
+            
+            // 파이프 작성
             PIPE_MSG pm;
             pm.type = PIPE_TYPE_MP;
             strcpy(pm.userName, received->userName);
             strcpy(pm.msg, bbuf);
-            DWORD writebytes = PIPE_MSG_SIZE;
-            if (!WritePipeMessage(serverInfo->hPipe, (LPVOID)&pm, writebytes, 0))
+            if (!WritePipeMessage(hMasterPipe, &pm, PIPE_MSG_SIZE, 0))
                 err_display("MP WritePipeMsg()");
+
+            CloseHandle(hMasterPipe);
         }
             break;
         case TYPE_IMG_REQ:
@@ -679,17 +691,24 @@ DWORD SlaveMain(LPVOID arg)
     printf("[SLAVE SERVER] 클라이언트 종료! [%s:%d]\n", addr, ntohs(clientaddr.sin_port));
     return 0;
 }
-//
-//DWORD ReadPipeMain(LPVOID arg)
-//{
-//    HANDLE hPipe = (HANDLE)arg;
-//    PIPE_MSG pm;
-//    DWORD readBytes = PIPE_MSG_SIZE;
-//    while (ReadPipeMessage(hPipe, &pm, readBytes, 0));
-//
-//    printf("파이프 쓰레드 종료\n");
-//    return 0;
-//}
+
+DWORD SlavePipeThread(LPVOID arg)
+{
+    BOOL result;
+    PIPE_MSG pm;
+    HANDLE hPipe = (HANDLE)arg;
+    while (true)
+    {
+        result = ReadPipeMessage(hPipe, &pm, PIPE_MSG_SIZE, 0);
+        if (!result)
+        {
+            MessageBox(NULL, TEXT("파이프 읽기 실패"), TEXT("SlavePipeThread(), ReadPipeMessage()"), MB_ICONERROR);
+            break;
+        }
+    }
+
+    return 0;
+}
 
 void err_quit(const char* title) {
     LPVOID lpMsgBuf;
