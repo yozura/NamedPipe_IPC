@@ -4,17 +4,21 @@
 /* 사용자 정의 라이브러리 */
 #include "../com/psi.h"
 #include "../com/packet.h"
+#include "../com/common.h"
 #include "pipefunc.h"
 
-#define BUFSIZE     1024
+#define BUFSIZE     512
 
 /// <summary>
 /// 프로세스 파이프를 생성 한 뒤 해당 파이프의 읽기/쓰기를 전담하는 쓰레드에 사용됩니다.
 /// </summary>
 /// <param name="arg">생성된(초기화된) 파이프를 전달해야합니다.</param>
 DWORD WINAPI PipeInstanceThread(LPVOID arg);
+DWORD WINAPI MasterPipeThread(LPVOID arg);
+BOOL WritePipeMessage(HANDLE hPipe, void* buf, DWORD writeBytes, DWORD cbWritten);
 
 /* 전역 변수 */
+HANDLE g_MasterPipe;
 PIPE_SERVER_INFO g_Servers[PIPE_SERVER_COUNT]; 
 
 int main(int argc, char* argv[])
@@ -23,6 +27,25 @@ int main(int argc, char* argv[])
 
     bool result;
     HANDLE hThread;
+
+    CreateMasterPipe(PIPE_MASTER, BUFSIZE, &g_MasterPipe);
+    if (!ConnectNamedPipe(g_MasterPipe, NULL))
+    {
+        if (GetLastError() == ERROR_PIPE_CONNECTED)
+        {
+            MessageBox(NULL, TEXT("마스터 파이프 연결 실패"), TEXT("ConnectNamedPipe()"), MB_ICONERROR);
+            return -1;
+        }
+    }
+
+    hThread = CreateThread(NULL, 0, MasterPipeThread, 0, 0, NULL);
+    if (NULL == hThread)
+    {
+        wprintf(TEXT("쓰레드 생성 실패 (에러 코드 = %d)\n"), GetLastError());
+        MessageBox(NULL, TEXT("쓰레드 생성 실패"), TEXT("CreateThread()"), MB_ICONERROR);
+        return -1;
+    }
+    else CloseHandle(hThread);
 
     for (int i = 0; i < PIPE_SERVER_COUNT; ++i)
     {
@@ -44,7 +67,7 @@ int main(int argc, char* argv[])
         if (!result)
         {
             MessageBox(NULL, TEXT("파이프 연결 실패"), TEXT("ConnectNamedPipe()"), MB_ICONERROR);
-            return false;
+            return -1;
         }
 
         // 여기까지 왔으면 파이프 연결 성공했으므로 각 파이프 마다 쓰레드로 종속 처리
@@ -53,7 +76,7 @@ int main(int argc, char* argv[])
         {
             wprintf(TEXT("쓰레드 생성 실패 (에러 코드 = %d)\n"), GetLastError());
             MessageBox(NULL, TEXT("쓰레드 생성 실패"), TEXT("CreateThread()"), MB_ICONERROR);
-            return false;
+            return -1;
         }
         else CloseHandle(hThread);
 
@@ -71,13 +94,14 @@ int main(int argc, char* argv[])
 DWORD WINAPI PipeInstanceThread(LPVOID arg)
 {
     HANDLE hHeap = GetProcessHeap();
-    TCHAR* pchRequest = (TCHAR*)HeapAlloc(hHeap, 0, BUFSIZE * sizeof(TCHAR));
-    TCHAR* pchReply = (TCHAR*)HeapAlloc(hHeap, 0, BUFSIZE * sizeof(TCHAR));
+    LPVOID pchRequest = (LPVOID)HeapAlloc(hHeap, 0, PIPE_MSG_SIZE);
+    LPVOID pchReply = (LPVOID)HeapAlloc(hHeap, 0, PIPE_MSG_SIZE);
 
     DWORD cbBytesRead, cbReplyBytes, cbWritten;
     cbBytesRead = cbReplyBytes = cbWritten = 0;
 
     BOOL result = FALSE;
+    BOOL flag = FALSE;
     HANDLE hPipe = NULL;
 
     // 파이프가 전달되지 않은 경우
@@ -104,7 +128,7 @@ DWORD WINAPI PipeInstanceThread(LPVOID arg)
     }
 
     hPipe = (HANDLE)arg;
-    while (true)
+    while (flag == FALSE)
     {
         // 1 ~ 2 ~ 3 반복, 마스터 서버에 메시지가 들어오는 경우는
         // 초기 서버 세팅과 이후 확성기 모드 이외엔 없다.
@@ -113,7 +137,7 @@ DWORD WINAPI PipeInstanceThread(LPVOID arg)
         result = ReadFile(
             hPipe,                      // 파이프 핸들
             pchRequest,                 // 수신 데이터 버퍼
-            BUFSIZE * sizeof(TCHAR),    // 버퍼 사이즈
+            PIPE_MSG_SIZE,              // 버퍼 사이즈
             &cbBytesRead,               // 바이트 수신량
             NULL);                      // 중첩 I/O 전용 파라미터
         if (!result || 0 == cbBytesRead)
@@ -124,22 +148,24 @@ DWORD WINAPI PipeInstanceThread(LPVOID arg)
         }
 
         // 2. 메시지 처리
-        TCHAR buf[BUFSIZE];
-        wsprintf(buf, pchRequest);
-        GetAnswerToRequest(pchRequest, pchReply, &cbReplyBytes, buf, BUFSIZE);
-
-        // 3. 메시지 작성
-        result = WriteFile(
-            hPipe,                      // 파이프 핸들
-            pchReply,                   // 송신 데이터 버퍼
-            cbReplyBytes,               // 작성할 바이트 송신량
-            &cbWritten,                 // 작성 바이트량
-            NULL);                      // 중첩 I/O 전용 파라미터
-        if (!result || cbReplyBytes != cbWritten)
+        PIPE_MSG* pm = (PIPE_MSG*)pchRequest;
+        printf("[MASTER SERVER] %s : %s\n", pm->userName, pm->msg);
+        switch (pm->type)
         {
-            // 작성에 실패했거나 작성한 데이터가 잘렸을 경우
-            wprintf(TEXT("WriteFile() (에러 코드 = %d)\n"), GetLastError());
+        case PIPE_TYPE_INIT:
+            // 초기 메시지 세팅
+            if (!WritePipeMessage(hPipe, (LPVOID)pm, PIPE_MSG_SIZE, cbWritten))
+                flag = TRUE;
             break;
+        case PIPE_TYPE_MP:
+        {
+            for (int i = 0; i < PIPE_SERVER_COUNT; ++i)
+            {
+                if (!WritePipeMessage(g_Servers[i].hPipe, (LPVOID)pm, PIPE_MSG_SIZE, cbWritten))
+                    flag = TRUE;
+            }
+            break;
+        }
         }
     }
 
@@ -154,4 +180,28 @@ DWORD WINAPI PipeInstanceThread(LPVOID arg)
 
     printf("쓰레드 종료\n");
     return 0;
+}
+
+DWORD WINAPI MasterPipeThread(LPVOID arg)
+{
+    return 0;
+}
+
+BOOL WritePipeMessage(HANDLE hPipe, void* buf, DWORD writeBytes, DWORD cbWritten)
+{
+    BOOL result;
+    result = WriteFile(
+        hPipe,                      // 파이프 핸들
+        buf,                        // 송신 데이터 버퍼
+        writeBytes,                 // 작성할 바이트 송신량
+        &cbWritten,                 // 작성 바이트량
+        NULL);                      // 중첩 I/O 전용 파라미터
+    if (!result || writeBytes != cbWritten)
+    {
+        // 작성에 실패했거나 작성한 데이터가 잘렸을 경우
+        wprintf(TEXT("WriteFile() (에러 코드 = %d)\n"), GetLastError());
+        return false;
+    }
+
+    return true;
 }

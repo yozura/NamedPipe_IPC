@@ -8,7 +8,22 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+/* 파이프 통신 시 사용되는 매크로 */
+#define PIPE_TYPE_INIT	2000
+#define PIPE_TYPE_MP	2001
+
+/* 파이프 통신 시 사용되는 구조체 */
+#define PIPE_MSG_SIZE	512
+typedef struct tag_pipe_msg
+{
+	int type;
+	char userName[9];
+	char msg[128];
+	char dummy[PIPE_MSG_SIZE - sizeof(int) - 128 - 9];
+} PIPE_MSG;
+
 /* 파이프 이름 매크로 */
+#define PIPE_MASTER	TEXT("\\\\.\\pipe\\master")
 #define PIPE_ASGARD TEXT("\\\\.\\pipe\\asgard")
 #define PIPE_MIDGARD TEXT("\\\\.\\pipe\\midgard")
 

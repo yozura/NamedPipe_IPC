@@ -3,6 +3,28 @@
 #include <Windows.h>
 #include <strsafe.h>
 
+bool CreateMasterPipe(LPCTSTR pipeName, DWORD bufSize, HANDLE* hPipe)
+{
+    HANDLE tempPipe = CreateNamedPipe(
+        pipeName,          // 파이프 이름
+        PIPE_ACCESS_DUPLEX,         // 읽기/쓰기 모드(양방향)
+        PIPE_TYPE_MESSAGE |
+        PIPE_READMODE_MESSAGE |
+        PIPE_WAIT,                  // 파이프 모드 설정
+        PIPE_UNLIMITED_INSTANCES,   // 파이프 인스턴스 최대치
+        bufSize,                    // 버퍼 사이즈(Out)
+        bufSize,                    // 버퍼 사이즈(In)
+        0, NULL);                   // 시큐리티 속성 기본값
+    if (INVALID_HANDLE_VALUE == hPipe)
+    {
+        wprintf(TEXT("명명된 파이프 생성 실패 (에러 코드 = %d)\n"), GetLastError());
+        return false;
+    }
+
+    hPipe = &tempPipe;
+    return true;
+}
+
 /// <summary>
 /// 하위 서버 프로세스를 생성합니다.
 /// </summary>
@@ -32,14 +54,6 @@ bool CreateSlavePipe(PIPE_SERVER_INFO* psi, DWORD bufSize);
 ///     false일 경우 초기화에 실패한 사유를 메세지 박스로 출력합니다.
 /// </returns>
 bool InitializeSlave(PIPE_SERVER_INFO* psi, DWORD bufSize);
-
-/// <summary>
-/// 파이프에 작성된 메시지의 정보를 파악해 답변을 보냅니다.
-/// </summary>
-/// <param name="pchRequest"></param>
-/// <param name="pchReply"></param>
-/// <param name="pchBytes"></param>
-void GetAnswerToRequest(LPTSTR pchRequest, LPTSTR pchReply, LPDWORD pchBytes, LPCTSTR pszSrc, DWORD bufSize);
 
 bool CreateSlaveProcess(PIPE_SERVER_INFO* psi)
 {
@@ -119,22 +133,3 @@ bool InitializeSlave(PIPE_SERVER_INFO* psi, DWORD bufSize)
 /// <param name="cbWritten"></param>
 /// <returns></returns>
 bool WritePipeMessage(HANDLE hPipe, const void* buf, DWORD writeBytes, DWORD cbWritten);
-
-void GetAnswerToRequest(LPTSTR pchRequest, LPTSTR pchReply, LPDWORD pchBytes, LPCTSTR pszSrc, DWORD bufSize)
-{
-    // 1. 받아온 메시지를 서버 로그에 출력한다
-    wprintf(TEXT("[MASTER SERVER] 받은 메시지 : %s\n"), pchRequest);
-
-    // 2. 메시지 패킷을 분석해 그에 맞는 답을 하위 서버에 에코한다.
-    // TODO
-
-    if (FAILED(StringCchCopy(pchReply, bufSize, pszSrc)))
-    {
-        *pchBytes = 0;
-        pchReply[0] = 0;
-        printf("StringCchCopy failed, no outgoing msg\n");
-        return;
-    }
-
-    *pchBytes = (lstrlen(pchReply) + 1) * sizeof(TCHAR);
-}

@@ -10,28 +10,26 @@
 #pragma once
 
 /* 패킷 전송 시 타입 구분을 위해 패킷에 유일성 부여 */
-#define TYPE_CHAT	1001
-#define TYPE_TXT	1002
-#define TYPE_IMG	1003
-
-#define NAMESIZE	8
-#define PATHSIZE	127
+#define TYPE_END		1000
+#define TYPE_CHAT		1001
+#define TYPE_TXT		1002
+#define TYPE_IMG		1003
+#define TYPE_MP         1004
+#define TYPE_FILEPATH   1005
+#define TYPE_TXT_REQ	1006
+#define TYPE_IMG_REQ	1007
+#define TYPE_NUM		1008
+	
+#define NAMESIZE	9
+#define PATHSIZE	128
 #define HEADSIZE	256
-
-#define BODYSIZE	65535
 
 /* 헤더 메시지 패킷 */
 typedef struct tag_msg_header
 {
 	int type;
 	int length;	
-	char userName[9];
-	char path[128];
+	char userName[NAMESIZE];
+	char path[PATHSIZE];
 	char dummy[HEADSIZE - (NAMESIZE + PATHSIZE + 2) - (2 * sizeof(int))];
 } MSG_HEADER;
-
-/* 바디 메시지 패킷 */
-typedef struct tag_msg_body
-{
-	char contents[BODYSIZE];
-} MSG_BODY;

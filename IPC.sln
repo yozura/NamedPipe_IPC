@@ -9,6 +9,7 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Master", "Master\Master.vcx
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "com", "com", "{5CB0738C-4A92-4299-BD95-9FD9D8C30FCD}"
 	ProjectSection(SolutionItems) = preProject
+		com\common.h = com\common.h
 		com\packet.h = com\packet.h
 		com\psi.h = com\psi.h
 	EndProjectSection

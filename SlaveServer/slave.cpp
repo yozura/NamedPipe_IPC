@@ -3,10 +3,12 @@
 #include <WS2tcpip.h>
 #include <locale.h>
 #include <stdio.h>
+#include <iostream>
 
 /* 사용자 정의 라이브러리 */
 #include "../com/psi.h"
 #include "../com/packet.h"
+#include "../com/common.h"
 #include "strobj.h"
 
 /* 라이브러리 링크 */
@@ -33,29 +35,30 @@ typedef struct tag_socket_info
     TCHAR               serverName[64];
 } SOCKET_INFO;
 
+SERVER_INFO* serverInfo = NULL;
 SOCKET_INFO* g_SocketInfoArray[MAX_SOCKET];
 int si_cursor;
 
 bool AddSocketInfo(SOCKET sock, struct sockaddr_in& addr, int addrlen);
-bool RemoveSocketInfo(TCHAR* name);
+bool RemoveSocketInfo(SOCKET* sock);
+BOOL SendChat(const char*, SOCKET*);
+BOOL SendTextFile(const char*, SOCKET*);
+BOOL SendImageFile(const char*, SOCKET*);
 SERVER_INFO* CheckServerType(char* type);
 HANDLE TryToConnectPipe(LPCTSTR lpszPipeName, int timeout);
 BOOL ChangePipeMode(HANDLE hPipe, DWORD dwMode);
 BOOL WritePipeMessage(HANDLE hPipe, void* buf, DWORD writeBytes, DWORD cbWritten);
 BOOL ReadPipeMessage(HANDLE hPipe, void* buf, DWORD readBytes, DWORD cbRead);
 DWORD SlaveMain(LPVOID arg);
-
 void err_display(const char* title);
 void err_quit(const char* title);
 
 int main(int argc, char* argv[])
 {
-    setlocale(LC_ALL, "");
+    setlocale(LC_ALL, "korean");
 
     si_cursor = 0;
     HANDLE hPipe;
-    SERVER_INFO* serverInfo = NULL;
-    TCHAR buf[BUFSIZE];
     BOOL result = FALSE;
     DWORD writeBytes, readBytes;
     int timeout = 20000;
@@ -71,21 +74,25 @@ int main(int argc, char* argv[])
     // 파이프 연결 시도
     hPipe = TryToConnectPipe(serverInfo->pipeName, timeout);
     if (NULL == hPipe) err_quit("TryToConnectPipe()");
+    serverInfo->hPipe = hPipe;
 
     // 파이프 연결에 성공했으므로 메시지 읽기 모드로 전환
     result = ChangePipeMode(hPipe, (PIPE_READMODE_MESSAGE));
     if (FALSE == result) err_quit("ChangePipeMode()");
     
     // 서버 초기 세팅 메시지를 작성한다.
-    lstrcpy(buf, serverInfo->pipeName);
-    lstrcat(buf, TEXT(" 활성화 성공"));
-    writeBytes = (lstrlen(buf) + 1) * sizeof(TCHAR);
-    result = WritePipeMessage(hPipe, buf, writeBytes, 0);
+    PIPE_MSG pm;
+    pm.type = PIPE_TYPE_INIT;
+    sprintf(pm.userName, "%d", serverInfo->port);
+    strcpy(pm.msg, "활성화 성공");
+    
+    writeBytes = PIPE_MSG_SIZE;
+    result = WritePipeMessage(hPipe, &pm, writeBytes, 0);
     if (FALSE == result) err_quit("WritePipeMessage()");
 
     // 서버 초기 세팅 메시지를 읽는다.
-    readBytes = BUFSIZE;
-    result = ReadPipeMessage(hPipe, buf, readBytes, 0);
+    readBytes = (int)strlen(pm.msg);
+    result = ReadPipeMessage(hPipe, &pm, readBytes, 0);
     if (FALSE == result) err_quit("ReadPipeMessage");
 
     // ---------------------------------
@@ -182,16 +189,12 @@ bool AddSocketInfo(SOCKET sock, struct sockaddr_in& addr, int addrlen)
     return true;
 }
 
-bool RemoveSocketInfo(TCHAR* name)
+bool RemoveSocketInfo(SOCKET* socket)
 {
     for (int i = 0; i < si_cursor; ++i)
     {
-        if (lstrcmp(g_SocketInfoArray[i]->serverName, name) == 0)
+        if (g_SocketInfoArray[i]->sock == *socket)
         {
-            char addr[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &g_SocketInfoArray[i]->addr, addr, sizeof(addr));
-            printf("[SLAVE SERVER] 클라이언트 종료 [%s:%d]\n", addr, ntohs(g_SocketInfoArray[i]->addr.sin_port));
-
             closesocket(g_SocketInfoArray[i]->sock);
             delete g_SocketInfoArray[i];
 
@@ -289,8 +292,6 @@ BOOL WritePipeMessage(HANDLE hPipe, void* buf, DWORD writeBytes, DWORD cbWritten
 {
     BOOL result;
 
-    // 연결된 파이프 서버에 메시지를 전송
-    wprintf(TEXT("Sending %d byte message: \"%s\"\n"), writeBytes, (TCHAR*)buf);
     result = WriteFile(
             hPipe,           // 파이프 핸들
             buf,             // 메시지 버퍼
@@ -302,6 +303,9 @@ BOOL WritePipeMessage(HANDLE hPipe, void* buf, DWORD writeBytes, DWORD cbWritten
         wprintf(TEXT("WriteFile to pipe failed. GLE=%d\n"), GetLastError());
         return FALSE;
     }
+
+    // 연결된 파이프 서버에 메시지를 전송
+    wprintf(TEXT("[SLAVE SERVER:PIPE] %d바이트 전송 완료\n"), writeBytes);
     return TRUE;
 }
 
@@ -323,12 +327,162 @@ BOOL ReadPipeMessage(HANDLE hPipe, void* buf, DWORD readBytes, DWORD cbRead)
     }
 
     // 읽어들인 데이터 출력
-    wprintf(TEXT("\"%s\"\n"), (TCHAR*)buf);
+    PIPE_MSG* pm = (PIPE_MSG*)buf;
+    switch (pm->type)
+    {
+    case PIPE_TYPE_INIT:
+        printf("[SLAVE SERVER:PIPE] %s\n", pm->msg);
+        break;
+    case PIPE_TYPE_MP:
+        // 메가폰일 경우 모든 하위 서버에 전송
+        for (int i = 0; i < si_cursor; ++i)
+        {
+            SOCKET_INFO* ptr = g_SocketInfoArray[i];
+            if (!SendChat(pm->msg, &ptr->sock))
+            {
+                err_display("MP_SendChat()");
+                return FALSE;
+            }
+        }
+        break;
+    }
+    return TRUE;
+}
+
+BOOL SendChat(const char* chat, SOCKET* sock)
+{
+    int retval;
+    int len = (int)strlen(chat) + 1;
+
+    MSG_HEADER header = { 0 };
+    header.type = TYPE_CHAT;
+    header.length = len;
+
+    retval = send(*sock, (char*)&header, sizeof(MSG_HEADER), 0);
+    if (SOCKET_ERROR == retval)
+    {
+        printf("[SLAVE SERVER] 채팅 메시지 헤더 전송에 실패했습니다.\n");
+        return false;
+    }
+
+    retval = send(*sock, chat, len, 0);
+    if (SOCKET_ERROR == retval)
+    {
+        printf("[SLAVE SERVER] 채팅 메시지 전송에 실패했습니다.\n");
+        return false;
+    }
+
+    return true;
+}
+
+BOOL SendTextFile(const char* path, SOCKET* sock)
+{
+    int retval;
+    FILE* fp = fopen(path, "rb");
+    if (NULL == fp)
+    {
+        printf("파일 열기 실패\n");
+        return false;
+    }
+
+    int fpos = fseek(fp, 0, SEEK_END);
+    long fileSize = ftell(fp);
+    rewind(fp);
+
+    MSG_HEADER header = { 0 };
+    header.type = TYPE_TXT;
+    header.length = fileSize;
+    strcpy(header.path, path);
+
+    retval = send(*sock, (char*)&header, sizeof(MSG_HEADER), 0);
+    if (SOCKET_ERROR == retval)
+    {
+        printf("파일 헤더 전송 실패\n");
+        return false;
+    }
+
+    char* buffer = (char*)calloc(fileSize, sizeof(char));
+    if (NULL == buffer)
+    {
+        printf("버퍼 동적 할당 실패\n");
+        return false;
+    }
+
+    int res = fread(buffer, sizeof(char), fileSize, fp);
+    retval = send(*sock, buffer, fileSize, 0);
+    if (SOCKET_ERROR == retval)
+    {
+        printf("파일 바디 전송 실패\n");
+        return false;
+    }
+
+    printf("[TCP SERVER] 텍스트 파일 %d / %d 바이트 전송 완료\n", res, retval);
+    fclose(fp);
+    free(buffer);
+    return true;
+}
+
+BOOL SendImageFile(const char* path, SOCKET* sock)
+{
+    int retval;
+    FILE* fp = fopen(path, "rb");
+    fseek(fp, 0, SEEK_END);
+    long fileSize = ftell(fp);
+    rewind(fp);
+
+    MSG_HEADER header = { 0 };
+    header.type = TYPE_IMG;
+    header.length = fileSize;
+    strcpy(header.path, path);
+
+    retval = send(*sock, (char*)&header, sizeof(MSG_HEADER), 0);
+    if (SOCKET_ERROR == retval)
+    {
+        printf("이미지 헤더 수신 실패\n");
+        return false;
+    }
+
+    char* buffer = (char*)calloc(fileSize, sizeof(char));
+    if (NULL == buffer)
+    {
+        printf("버퍼 동적 할당 실패\n");
+        return false;
+    }
+
+    int res = fread(buffer, sizeof(char), fileSize, fp);
+    retval = send(*sock, buffer, fileSize, 0);
+    if (SOCKET_ERROR == retval)
+    {
+        printf("파일 송신 실패\n");
+        return false;
+    }
+    printf("[SLAVE SERVER] 이미지 %d / %d바이트 전송 완료\n", res, retval);
+    fclose(fp);
+    free(buffer);
+    return true;
+}
+
+BOOL SendFilePath(const char* path, SOCKET* sock)
+{
+    int retval;
+    MSG_HEADER header;
+    header.type = TYPE_FILEPATH;
+    header.length = (int)strlen(path) + 1;
+    strcpy(header.path, path);
+    
+    retval = send(*sock, (char*)&header, sizeof(MSG_HEADER), 0);
+    if (SOCKET_ERROR == retval)
+    {
+        err_display("FilePath Send()");
+        return FALSE;
+    }
+
     return TRUE;
 }
 
 DWORD SlaveMain(LPVOID arg)
 {
+    int test;
     SOCKET sock = (SOCKET)arg;
     struct sockaddr_in clientaddr;
     int addrlen;
@@ -343,58 +497,52 @@ DWORD SlaveMain(LPVOID arg)
     {
         char* hbuf = (char*)calloc(1, sizeof(MSG_HEADER));
         retval = recv(sock, hbuf, sizeof(MSG_HEADER), 0);
-        if (SOCKET_ERROR == retval) err_display("header recv()");
+        if (SOCKET_ERROR == retval)
+        {
+            err_display("header recv()");
+            continue;
+        }
         else if (0 == retval) break;
-
+        
         MSG_HEADER* received = (MSG_HEADER*)hbuf;
-        printf("type = %d\nlength = %d\npath = %s\n", received->type, received->length, received->path);
+        if (received->type == -1) break;
 
-        TCHAR* bbuf = (TCHAR*)calloc(received->length + 1, sizeof(TCHAR));
+        printf("type = %d\nlength = %d\npath = %s\n", received->type, received->length, received->path);
+        if (!((received->type == TYPE_CHAT) || (received->type == TYPE_TXT) || (received->type == TYPE_IMG) || (received->type == TYPE_TXT_REQ) || (received->type == TYPE_IMG_REQ))) continue;   ////////// 수정!
+
+        char* bbuf = (char*)calloc(received->length + 1, sizeof(char));
         if (NULL == bbuf)
         {
             err_display("Failed allocat body buffer\n");
             break;
         }
-
+        
         int idx;
         String cut, savepath;
         FILE* fp;
-
-        // 파일을 전송하는 로직은 클라이언트 측에서 파일 스트림으로 올린 파일을 열어
-        // 스트림으로 슬레이브 서버로 쏘고, 그걸 서버에서 recv()로 받으면 된다.
+        int sum = 0; 
         switch (received->type) 
         {
         case TYPE_CHAT:
         {
-            retval = recv(sock, (char*)bbuf, received->length * 2, 0);
+            retval = recv(sock, bbuf, received->length, 0);
             if (retval == SOCKET_ERROR) err_quit("body recv()");
 
-            int len = (int)lstrlen(bbuf);
+            int len = (int)strlen(bbuf);
             bbuf[len] = '\0';
             printf("[SLAVE SERVER] %d바이트를 받았습니다.\n", retval);
-            printf("[SLAVE SERVER] [%s:%d] %ls\n", addr, ntohs(clientaddr.sin_port), bbuf);
+            printf("[SLAVE SERVER] [%s:%d] %s\n", addr, ntohs(clientaddr.sin_port), bbuf);
 
             /* 모든 클라에 에코잉 */
             for (int i = 0; i < si_cursor; ++i)
             {
                 SOCKET_INFO* ptr = g_SocketInfoArray[i];
-                retval = send(ptr->sock, (char*)hbuf, sizeof(MSG_HEADER), 0);
-                if (SOCKET_ERROR == retval)
+                if (!SendChat(bbuf, &ptr->sock))
                 {
-                    printf("[SLAVE SERVER] 채팅 메시지 헤더 전송에 실패했습니다.\n");
-                    if (!RemoveSocketInfo(ptr->serverName)) err_display("send() header");
-                    break;
-                }
-
-                retval = send(ptr->sock, (char*)bbuf, len, 0);
-                if (SOCKET_ERROR == retval)
-                {
-                    printf("[SLAVE SERVER] 채팅 메시지 전송에 실패했습니다.\n");
-                    if (!RemoveSocketInfo(ptr->serverName)) err_display("send() body");
+                    err_display("SendChat()");
                     break;
                 }
             }
-
         }
             break;
         case TYPE_TXT:
@@ -409,6 +557,8 @@ DWORD SlaveMain(LPVOID arg)
                 char headBuf[HEADSIZE];
                 retval = recv(sock, headBuf, sizeof(MSG_HEADER), 0);
                 MSG_HEADER* temphd = (MSG_HEADER*)headBuf;
+                if (temphd->length == -1) break;
+
                 char* strbuf = (char*)calloc(temphd->length + 1, sizeof(char));
                 if (NULL == strbuf)
                 {
@@ -419,11 +569,23 @@ DWORD SlaveMain(LPVOID arg)
                 retval = recv(sock, strbuf, temphd->length, 0);
                 printf("%s", strbuf);
                 fputs(strbuf, fp);
-
                 free(strbuf);
+
+                sum += retval;
             } while (retval != 0);
             fclose(fp);
             printf("파일이 저장되었습니다.\n");
+
+            /* 모든 클라에 에코잉 */
+            for (int i = 0; i < si_cursor; ++i)
+            {
+                SOCKET_INFO* ptr = g_SocketInfoArray[i];
+                if (!SendFilePath(savepath, &ptr->sock))
+                {
+                    err_display("SendTextFile()");
+                    break;
+                }
+            }
         }
             break;
         case TYPE_IMG:
@@ -438,6 +600,8 @@ DWORD SlaveMain(LPVOID arg)
                 char tempbuf[HEADSIZE];
                 retval = recv(sock, tempbuf, sizeof(MSG_HEADER), 0);
                 MSG_HEADER* temphd = (MSG_HEADER*)tempbuf;
+                if (temphd->length == -1) break;
+
                 char* imgbuf = (char*)calloc(temphd->length, sizeof(char));
                 if (NULL == imgbuf)
                 {
@@ -446,12 +610,55 @@ DWORD SlaveMain(LPVOID arg)
                 }
 
                 retval = recv(sock, imgbuf, temphd->length, 0);
+                if (SOCKET_ERROR == retval) break;
+
                 fwrite(imgbuf, sizeof(char), temphd->length, fp);
                 free(imgbuf);
-            } while (retval != 0);
+                sum += retval;
+            } while (retval == HEADSIZE);
             fclose(fp);
             printf("이미지가 저장되었습니다.\n");
+
+            /* 모든 클라에 에코잉 */
+            for (int i = 0; i < si_cursor; ++i)
+            {
+                SOCKET_INFO* ptr = g_SocketInfoArray[i];
+                if (!SendFilePath(savepath, &ptr->sock))
+                {
+                    err_display("SendImageFile()");
+                    break;
+                }
+            }
         }
+            break;
+        case TYPE_MP:
+        {
+            // 1. 바디 받기
+            retval = recv(sock, bbuf, received->length, 0);
+            if (SOCKET_ERROR == retval) err_quit("body recv()");
+
+            int len = (int)strlen(bbuf);
+            bbuf[len] = '\0';
+            printf("[SLAVE SERVER] %d바이트를 받았습니다.\n", retval);
+            printf("[SLAVE SERVER] [%s:%d] %s\n", addr, ntohs(clientaddr.sin_port), bbuf);
+
+            std::cin >> test;
+
+            // 1. 파이프 통신
+            PIPE_MSG pm;
+            pm.type = PIPE_TYPE_MP;
+            strcpy(pm.userName, received->userName);
+            strcpy(pm.msg, bbuf);
+            DWORD writebytes = PIPE_MSG_SIZE;
+            if (!WritePipeMessage(serverInfo->hPipe, (LPVOID)&pm, writebytes, 0))
+                err_display("MP WritePipeMsg()");
+        }
+            break;
+        case TYPE_IMG_REQ:
+            SendImageFile(received->path, &sock);
+            break;
+        case TYPE_TXT_REQ:
+            SendTextFile(received->path, &sock);
             break;
         }
         
@@ -468,10 +675,21 @@ DWORD SlaveMain(LPVOID arg)
         }
     }
 
-    printf("[SLAVE SERVER]클라이언트 종료! [%s:%d]\n", addr, ntohs(clientaddr.sin_port));
-
+    RemoveSocketInfo(&sock);
+    printf("[SLAVE SERVER] 클라이언트 종료! [%s:%d]\n", addr, ntohs(clientaddr.sin_port));
     return 0;
 }
+//
+//DWORD ReadPipeMain(LPVOID arg)
+//{
+//    HANDLE hPipe = (HANDLE)arg;
+//    PIPE_MSG pm;
+//    DWORD readBytes = PIPE_MSG_SIZE;
+//    while (ReadPipeMessage(hPipe, &pm, readBytes, 0));
+//
+//    printf("파이프 쓰레드 종료\n");
+//    return 0;
+//}
 
 void err_quit(const char* title) {
     LPVOID lpMsgBuf;
